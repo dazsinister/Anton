@@ -1,6 +1,6 @@
 # Anton.py
-# Three independent scrapers to DIFFERENT channels with health embeds, /stats, /interval.
-# Also loads the /poll cog from cogs/poll.py
+# Four independent scrapers (RedTag, Damages, FreeGames, HPB) to DIFFERENT channels
+# with health embeds, /stats, /interval, manual run slash commands, and poll cog.
 
 import os
 import asyncio
@@ -12,9 +12,11 @@ from dotenv import load_dotenv
 import discord
 from discord.ext import commands, tasks
 
+# --- scrapers ---
 import scrapers.redtag as redtag
 import scrapers.damages as damages
-import scrapers.freegames as freegames  # NEW
+import scrapers.freegames as freegames
+import scrapers.hpb as hpb
 
 # ======================
 # Config
@@ -25,20 +27,25 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 if not DISCORD_TOKEN:
     raise SystemExit("Set DISCORD_TOKEN in .env")
 
-# ---------- Red Tag targets & interval ----------
+# ---------- Red Tag ----------
 CHANNEL_ID_REDTAG = int(os.getenv("CHANNEL_ID_REDTAG", "0").strip() or 0)
 THREAD_ID_REDTAG  = int(os.getenv("THREAD_ID_REDTAG", "0").strip() or 0)
 RUN_INTERVAL_MIN_REDTAG = int(os.getenv("RUN_INTERVAL_MIN_REDTAG", "60").strip() or 60)
 
-# ---------- Damages targets & interval ----------
+# ---------- Damages ----------
 CHANNEL_ID_DAMAGES = int(os.getenv("CHANNEL_ID_DAMAGES", "0").strip() or 0)
 THREAD_ID_DAMAGES  = int(os.getenv("THREAD_ID_DAMAGES", "0").strip() or 0)
 RUN_INTERVAL_MIN_DAMAGES = int(os.getenv("RUN_INTERVAL_MIN_DAMAGES", "60").strip() or 60)
 
-# ---------- Free Games targets & interval (NEW) ----------
+# ---------- Free Games ----------
 CHANNEL_ID_FREEGAMES = int(os.getenv("CHANNEL_ID_FREEGAMES", "0").strip() or 0)
 THREAD_ID_FREEGAMES  = int(os.getenv("THREAD_ID_FREEGAMES", "0").strip() or 0)
 RUN_INTERVAL_MIN_FREEGAMES = int(os.getenv("RUN_INTERVAL_MIN_FREEGAMES", "60").strip() or 60)
+
+# ---------- Half Price Books (HPB) ----------
+CHANNEL_ID_HPB = int(os.getenv("CHANNEL_ID_HPB", "0").strip() or 0)
+THREAD_ID_HPB  = int(os.getenv("THREAD_ID_HPB", "0").strip() or 0)
+RUN_INTERVAL_MIN_HPB = int(os.getenv("RUN_INTERVAL_MIN_HPB", "60").strip() or 60)
 
 # Pacing for message posting
 POST_DELAY     = float(os.getenv("POST_DELAY", "0.25"))
@@ -67,13 +74,15 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # Locks to prevent overlapping runs
 redtag_lock = asyncio.Lock()
 damages_lock = asyncio.Lock()
-freegames_lock = asyncio.Lock()  # NEW
+freegames_lock = asyncio.Lock()
+hpb_lock = asyncio.Lock()
 
 # Last-run stats
 last_stats = {
     "Red Tag":  {"last_run": None, "scraped": 0, "new": 0, "changed": 0, "pruned": 0, "interval_min": RUN_INTERVAL_MIN_REDTAG},
     "Damages":  {"last_run": None, "scraped": 0, "new": 0, "changed": 0, "pruned": 0, "interval_min": RUN_INTERVAL_MIN_DAMAGES},
-    "FreeGames":{"last_run": None, "scraped": 0, "new": 0, "changed": 0, "pruned": 0, "interval_min": RUN_INTERVAL_MIN_FREEGAMES},  # NEW
+    "FreeGames":{"last_run": None, "scraped": 0, "new": 0, "changed": 0, "pruned": 0, "interval_min": RUN_INTERVAL_MIN_FREEGAMES},
+    "HPB":      {"last_run": None, "scraped": 0, "new": 0, "changed": 0, "pruned": 0, "interval_min": RUN_INTERVAL_MIN_HPB},
 }
 
 # ======================
@@ -117,6 +126,8 @@ def get_next_run_dt(label: str) -> datetime | None:
         return getattr(auto_damages, "next_iteration", None)
     if label == "FreeGames":
         return getattr(auto_freegames, "next_iteration", None)
+    if label == "HPB":
+        return getattr(auto_hpb, "next_iteration", None)
     return None
 
 def fmt_next_run(label: str) -> str:
@@ -262,6 +273,19 @@ async def print_startup_diagnostics():
             print(f"FREEGAMES THREAD_ID -> {getattr(th, 'name', th)} | type={type(th)} | parent={getattr(th, 'parent', None)}")
         except Exception as e:
             print(f"Immediate fetch failed for FREEGAMES thread {THREAD_ID_FREEGAMES}: {e}")
+    # HPB
+    if CHANNEL_ID_HPB:
+        try:
+            ch = await bot.fetch_channel(CHANNEL_ID_HPB)
+            print(f"HPB CHANNEL_ID -> {getattr(ch, 'name', ch)} | type={type(ch)} | guild={getattr(ch, 'guild', None)}")
+        except Exception as e:
+            print(f"Immediate fetch failed for HPB channel {CHANNEL_ID_HPB}: {e}")
+    if THREAD_ID_HPB:
+        try:
+            th = await bot.fetch_channel(THREAD_ID_HPB)
+            print(f"HPB THREAD_ID -> {getattr(th, 'name', th)} | type={type(th)} | parent={getattr(th, 'parent', None)}")
+        except Exception as e:
+            print(f"Immediate fetch failed for HPB thread {THREAD_ID_HPB}: {e}")
     # Log channel
     if LOG_CHANNEL_ID:
         try:
@@ -316,6 +340,14 @@ async def on_ready():
         print("Failed to load cogs.poll:")
         traceback.print_exc()
 
+    # --- Load the /birthday cog here ---
+    try:
+        await bot.load_extension("cogs.birthday")
+        print("Loaded cog: cogs.birthday")
+    except Exception:
+        print("Failed to load cogs.birthday:")
+        traceback.print_exc()
+
     # Slash sync
     if MY_GUILD is not None:
         try:
@@ -338,6 +370,8 @@ async def on_ready():
         auto_damages.start()
     if not auto_freegames.is_running():
         auto_freegames.start()
+    if not auto_hpb.is_running():
+        auto_hpb.start()
 
     # Give loops a beat to schedule next_iteration so /stats shows "Next run"
     await asyncio.sleep(0.2)
@@ -379,6 +413,15 @@ async def freegames_cmd(interaction: discord.Interaction):
     await run_scraper_once(freegames, target, "FreeGames", lock=freegames_lock)
     await interaction.followup.send("Free Games done.", ephemeral=True)
 
+@bot.tree.command(name="hpb", description="Run the Half Price Books scrape now (posts to its channel).")
+async def hpb_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    target = await resolve_channel_like(CHANNEL_ID_HPB, THREAD_ID_HPB) or interaction.channel
+    if not target or not hasattr(target, "send"):
+        return await interaction.followup.send("No sendable channel for HPB.", ephemeral=True)
+    await run_scraper_once(hpb, target, "HPB", lock=hpb_lock)
+    await interaction.followup.send("HPB done.", ephemeral=True)
+
 # ---- Slash: /stats ----
 @bot.tree.command(name="stats", description="Show last run stats and current intervals.")
 async def stats_cmd(interaction: discord.Interaction):
@@ -399,6 +442,7 @@ async def stats_cmd(interaction: discord.Interaction):
     await interaction.followup.send(embed=build_embed("Red Tag"), ephemeral=True)
     await interaction.followup.send(embed=build_embed("Damages"), ephemeral=True)
     await interaction.followup.send(embed=build_embed("FreeGames"), ephemeral=True)
+    await interaction.followup.send(embed=build_embed("HPB"), ephemeral=True)
 
 # ---- Slash: /interval ----
 @bot.tree.command(name="interval", description="Change run interval (minutes) for a feed.")
@@ -408,7 +452,7 @@ async def interval_cmd(
     minutes: int
 ):
     """
-    /interval feed:<redtag|damages|freegames> minutes:<1..10080>
+    /interval feed:<redtag|damages|freegames|hpb> minutes:<1..10080>
     """
     await interaction.response.defer(ephemeral=True)
     feed_l = feed.strip().lower()
@@ -428,8 +472,12 @@ async def interval_cmd(
             auto_freegames.change_interval(minutes=minutes)
             last_stats["FreeGames"]["interval_min"] = minutes
             await interaction.followup.send(f"Set **FreeGames** interval to **{minutes}** minutes.", ephemeral=True)
+        elif feed_l in ("hpb", "halfprice", "halfpricedbooks"):
+            auto_hpb.change_interval(minutes=minutes)
+            last_stats["HPB"]["interval_min"] = minutes
+            await interaction.followup.send(f"Set **HPB** interval to **{minutes}** minutes.", ephemeral=True)
         else:
-            await interaction.followup.send("Unknown feed. Use `redtag`, `damages`, or `freegames`.", ephemeral=True)
+            await interaction.followup.send("Unknown feed. Use `redtag`, `damages`, `freegames`, or `hpb`.", ephemeral=True)
     except Exception:
         traceback.print_exc()
         await interaction.followup.send("Failed to update interval due to an internal error.", ephemeral=True)
@@ -451,13 +499,21 @@ async def auto_damages():
         return
     await run_scraper_once(damages, target, "Damages", lock=damages_lock)
 
-@tasks.loop(minutes=RUN_INTERVAL_MIN_FREEGAMES)  # NEW
+@tasks.loop(minutes=RUN_INTERVAL_MIN_FREEGAMES)
 async def auto_freegames():
     target = await resolve_channel_like(CHANNEL_ID_FREEGAMES, THREAD_ID_FREEGAMES)
     if target is None or not hasattr(target, "send"):
         print("auto_freegames: channel not sendable; will retry next tick.")
         return
     await run_scraper_once(freegames, target, "FreeGames", lock=freegames_lock)
+
+@tasks.loop(minutes=RUN_INTERVAL_MIN_HPB)
+async def auto_hpb():
+    target = await resolve_channel_like(CHANNEL_ID_HPB, THREAD_ID_HPB)
+    if target is None or not hasattr(target, "send"):
+        print("auto_hpb: channel not sendable; will retry next tick.")
+        return
+    await run_scraper_once(hpb, target, "HPB", lock=hpb_lock)
 
 # Stagger starts a bit so they don't fire at the same moment
 @auto_redtag.before_loop
@@ -472,16 +528,21 @@ async def _stagger_damages():
 async def _stagger_freegames():
     await asyncio.sleep(8)
 
+@auto_hpb.before_loop
+async def _stagger_hpb():
+    await asyncio.sleep(11)
+
 # ======================
 # Main
 # ======================
 if __name__ == "__main__":
     print(
-        f"RedTag:   channel={CHANNEL_ID_REDTAG} thread={THREAD_ID_REDTAG} interval={RUN_INTERVAL_MIN_REDTAG}min\n"
-        f"Damages:  channel={CHANNEL_ID_DAMAGES} thread={THREAD_ID_DAMAGES} interval={RUN_INTERVAL_MIN_DAMAGES}min\n"
-        f"FreeGames:channel={CHANNEL_ID_FREEGAMES} thread={THREAD_ID_FREEGAMES} interval={RUN_INTERVAL_MIN_FREEGAMES}min\n"
-        f"Pacing:   delay={POST_DELAY}s batch={BATCH_SIZE} cool={BATCH_COOLDOWN}s\n"
-        f"Forum:    autocreate={FORUM_AUTOCREATE} title='{FORUM_THREAD_TITLE}'\n"
-        f"Health:   enabled={HEALTH_MESSAGES} log_channel={LOG_CHANNEL_ID or 'same as feed'}"
+        f"RedTag:    channel={CHANNEL_ID_REDTAG} thread={THREAD_ID_REDTAG} interval={RUN_INTERVAL_MIN_REDTAG}min\n"
+        f"Damages:   channel={CHANNEL_ID_DAMAGES} thread={THREAD_ID_DAMAGES} interval={RUN_INTERVAL_MIN_DAMAGES}min\n"
+        f"FreeGames: channel={CHANNEL_ID_FREEGAMES} thread={THREAD_ID_FREEGAMES} interval={RUN_INTERVAL_MIN_FREEGAMES}min\n"
+        f"HPB:       channel={CHANNEL_ID_HPB} thread={THREAD_ID_HPB} interval={RUN_INTERVAL_MIN_HPB}min\n"
+        f"Pacing:    delay={POST_DELAY}s batch={BATCH_SIZE} cool={BATCH_COOLDOWN}s\n"
+        f"Forum:     autocreate={FORUM_AUTOCREATE} title='{FORUM_THREAD_TITLE}'\n"
+        f"Health:    enabled={HEALTH_MESSAGES} log_channel={LOG_CHANNEL_ID or 'same as feed'}"
     )
     bot.run(DISCORD_TOKEN)
