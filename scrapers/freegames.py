@@ -1,30 +1,24 @@
-# scrapers/freegames.py
 from __future__ import annotations
-
 import json
 import time
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
-
 import requests
 
-# ========= Config =========
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AntonFreeGames/1.0)"}
-TIMEOUT = (5, 15)  # (connect, read)
-PER_SOURCE_DELAY = 0.4  # short pause between sources to be polite
+TIMEOUT = (5, 15)
+PER_SOURCE_DELAY = 0.4
 
-# Paths (flat legacy style like your other scrapers)
 BASE_DIR  = Path(__file__).resolve().parent.parent
 DATA_DIR  = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-SEEN_JSON = DATA_DIR / "freegames_seen.json"   # dict: key -> snapshot
+SEEN_JSON = DATA_DIR / "freegames_seen.json"
 
 if not SEEN_JSON.exists():
     SEEN_JSON.write_text("{}", encoding="utf-8")
 
-# ========= Helpers =========
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -33,7 +27,6 @@ def _parse_dt(s: Optional[str]) -> Optional[str]:
     if not s:
         return None
     try:
-        # handle various formats (GamerPower uses UTC ISO, Epic uses ISO with Z)
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
         return dt.astimezone(timezone.utc).isoformat()
     except Exception:
@@ -60,7 +53,6 @@ def _load_seen() -> Dict[str, dict]:
 def _save_seen(seen: Dict[str, dict]) -> None:
     SEEN_JSON.write_text(json.dumps(seen, ensure_ascii=False, indent=2), encoding="utf-8")
 
-# ========= Sources =========
 def fetch_epic() -> List[dict]:
     """
     Pull current Epic free games.
@@ -86,16 +78,13 @@ def fetch_epic() -> List[dict]:
         if not title:
             continue
 
-        # Figure a stable URL
         slug = el.get("productSlug") or ""
         url = f"https://store.epicgames.com/p/{slug}" if slug else "https://store.epicgames.com/"
 
-        # Find free promo windows
         promos = (el.get("promotions") or {})
         current = (promos.get("promotionalOffers") or [])
         upcoming = (promos.get("upcomingPromotionalOffers") or [])
 
-        # We consider only currently free offers
         windows = []
         if current and isinstance(current, list):
             for block in current:
@@ -112,7 +101,6 @@ def fetch_epic() -> List[dict]:
         if not windows:
             continue
 
-        # build item (use first window for end_date)
         end_date = windows[0].get("end_date")
         out.append({
             "key": f"epic::{slug or title.lower()}",
@@ -146,24 +134,18 @@ def fetch_gamerpower() -> List[dict]:
             title = _clean_title(g.get("title") or "")
             if not title:
                 continue
-            # GamerPower platforms field can be like "PC, Steam" etc.
             platforms = _clean_title(g.get("platforms") or "")
-            worth = g.get("worth") or ""  # sometimes "$0" or "$19.99"
+            worth = g.get("worth") or ""
             end_str = g.get("end_date") or None
             end_iso = _parse_dt(end_str) if end_str else None
             url = g.get("open_giveaway_url") or g.get("giveaway_url") or g.get("url") or ""
             if not url:
                 continue
 
-            # Stable key: source + numeric id if present
             gid = str(g.get("id") or "")
             key = f"gamerpower::{gid}" if gid else f"gamerpower::{title.lower()}::{url}"
 
-            # Only include "Game" type / true freebies if possible
             gtype = (g.get("type") or "").lower()
-            # Keep most; you can filter further if you only want "Game"
-            # if gtype not in ("game", "gameloot"):
-            #     continue
 
             out.append({
                 "key": key,
@@ -181,35 +163,27 @@ def fetch_gamerpower() -> List[dict]:
 
     return out
 
-# ========= Scrape Orchestrator =========
 def scrape_all_sources() -> List[dict]:
     items: List[dict] = []
-    # Epic
     epic_items = fetch_epic()
     items.extend(epic_items)
     time.sleep(PER_SOURCE_DELAY)
-    # GamerPower (covers Steam/Epic/GOG/etc.)
     gp_items = fetch_gamerpower()
     items.extend(gp_items)
 
-    # De-dupe by key (prefer Epic over GP if collision)
     uniq: Dict[str, dict] = {}
     for it in items:
         k = it["key"]
         if k in uniq:
-            # basic preference: keep Epic if collision
             if it["source"] == "Epic":
                 uniq[k] = it
-            # else keep existing
         else:
             uniq[k] = it
 
-    # sort by platform then title for stable order
     out = list(uniq.values())
     out.sort(key=lambda x: (x.get("platform", ""), x.get("title", "").lower()))
     return out
 
-# ========= Public API expected by Anton =========
 def get_updates() -> Tuple[List[dict], List[dict], int, int]:
     """
     Returns:
@@ -224,7 +198,6 @@ def get_updates() -> Tuple[List[dict], List[dict], int, int]:
 
     seen = _load_seen()
 
-    # prune disappeared
     stale = set(seen.keys()) - current_keys
     for k in stale:
         seen.pop(k, None)
@@ -248,7 +221,6 @@ def get_updates() -> Tuple[List[dict], List[dict], int, int]:
             seen[k] = snapshot
         else:
             prev = seen[k]
-            # Detect changes that matter to users
             changed = (
                 (prev.get("end_date") or "") != (snapshot.get("end_date") or "") or
                 (prev.get("url") or "")      != (snapshot.get("url") or "") or
@@ -256,13 +228,12 @@ def get_updates() -> Tuple[List[dict], List[dict], int, int]:
                 (prev.get("platform") or "") != (snapshot.get("platform") or "")
             )
             if changed:
-                # enrich with old values for rendering
                 it["_old_end"] = prev.get("end_date")
                 it["_old_url"] = prev.get("url")
                 it["_old_title"] = prev.get("title")
                 it["_old_platform"] = prev.get("platform")
                 changed_items.append(it)
-                seen[k] = snapshot  # update snapshot
+                seen[k] = snapshot
 
     _save_seen(seen)
     return new_items, changed_items, pruned, total
@@ -284,7 +255,6 @@ def render_item(it: dict) -> str:
     if it.get("url"):
         parts.append(it["url"])
 
-    # change notes
     ch = []
     if it.get("_old_end") is not None and (it.get("_old_end") != it.get("end_date")):
         ch.append(f"End: {_short_dt(it.get('_old_end'))} → {_short_dt(it.get('end_date'))}")
