@@ -10,9 +10,9 @@ class PollView(discord.ui.View):
         self.owner_id = owner_id
         self.question = question
         self.options = options[:5]
-        self.votes: Dict[int, int] = {}  # user_id -> option_index
+        self.votes: Dict[int, int] = {}  
         self.counts = [0] * len(self.options)
-        self.message: Optional[discord.Message] = None  # set after send
+        self.message: Optional[discord.Message] = None  
 
         for idx, label in enumerate(self.options):
             btn = discord.ui.Button(
@@ -37,7 +37,7 @@ class PollView(discord.ui.View):
 
                 await self._edit_embed(interaction)
 
-            btn.callback = on_click  # type: ignore
+            btn.callback = on_click  
             self.add_item(btn)
 
     def build_embed(self) -> discord.Embed:
@@ -59,10 +59,10 @@ class PollView(discord.ui.View):
         if self.message:
             await self.message.edit(embed=emb, view=self)
             if not interaction.response.is_done():
-                await interaction.response.defer()  # ack silently
+                await interaction.response.defer()  
         else:
             if interaction.response.is_done():
-                await interaction.message.edit(embed=emb, view=self)  # type: ignore
+                await interaction.message.edit(embed=emb, view=self)  
             else:
                 await interaction.response.edit_message(embed=emb, view=self)
 
@@ -124,7 +124,7 @@ class PollCog(commands.Cog):
         view = PollView(owner_id=interaction.user.id, question=question, options=options, duration_sec=duration_sec)
         embed = view.build_embed()
         msg = await channel.send(embed=embed, view=view)
-        view.message = msg  # so the view can edit/close on timeout
+        view.message = msg  
         active_polls[msg.id] = view
 
         await interaction.followup.send("Poll posted ✅", ephemeral=True)
