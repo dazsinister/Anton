@@ -1,29 +1,24 @@
-# scrapers/dc_watch.py
 from __future__ import annotations
-
 import json, os, re, time
 from random import random
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from urllib.parse import urljoin, urlparse
-
 import requests
 from bs4 import BeautifulSoup
 
 BASE_URL = "https://www.instocktrades.com/publishers/dc-comics"
 
-# --- env toggles ---
 DC_DEBUG   = os.getenv("DC_DEBUG", "0").lower() in {"1","true","yes","on"}
 DC_POST_NEW = os.getenv("DC_POST_NEW", "false").lower() in {"1","true","yes","on"}
 PER_PAGE_DELAY = float(os.getenv("DC_PER_PAGE_DELAY", "0.8"))
 MAX_PAGES      = int(os.getenv("DC_MAX_PAGES", "200"))
 TIMEOUT        = int(os.getenv("DC_TIMEOUT", "25"))
-MAX_RUN_SECONDS= float(os.getenv("DC_MAX_RUN_SECONDS", "540"))  # ~9 min budget (Anton gives 10)
+MAX_RUN_SECONDS= float(os.getenv("DC_MAX_RUN_SECONDS", "540"))
 
 DC_COOKIE  = os.getenv("DC_COOKIE", "").strip()
 DC_REFERER = os.getenv("DC_REFERER", "https://www.instocktrades.com/").strip()
 
-# --- storage ---
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -31,7 +26,6 @@ SEEN_JSON = DATA_DIR / "dc_seen.json"
 if not SEEN_JSON.exists():
     SEEN_JSON.write_text("{}", encoding="utf-8")
 
-# --- headers ---
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -46,7 +40,6 @@ HEADERS = {
 if DC_COOKIE:
     HEADERS["Cookie"] = DC_COOKIE
 
-# --- regex helpers ---
 money_rx = re.compile(r"\$\s?\d{1,3}(?:[,\d]{3})*(?:\.\d{2})?")
 add_rx   = re.compile(r"add\s*to\s*cart", re.I)
 
