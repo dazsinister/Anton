@@ -1,90 +1,66 @@
-# Anton.py
-# Feeds: RedTag, Damages, FreeGames, Marvel, DC (publisher watch)
-# Health embeds, /stats, /interval, manual run commands; loads cogs: poll, birthday.
-
 import os
 import asyncio
 import functools
 import traceback
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-
 import discord
 from discord.ext import commands, tasks
-
-# --- Scrapers (must expose: get_updates(), render_item()) ---
 import scrapers.redtag as redtag
 import scrapers.damages as damages
 import scrapers.freegames as freegames
 import scrapers.marvel_watch as marvel
-import scrapers.dc_watch as dc  # NEW
+import scrapers.dc_watch as dc  
 
-# ======================
-# Config
-# ======================
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
 if not DISCORD_TOKEN:
     raise SystemExit("Set DISCORD_TOKEN in .env")
 
-# ---- RedTag ----
 CHANNEL_ID_REDTAG = int(os.getenv("CHANNEL_ID_REDTAG", "0") or 0)
 THREAD_ID_REDTAG  = int(os.getenv("THREAD_ID_REDTAG", "0") or 0)
 RUN_INTERVAL_MIN_REDTAG = int(os.getenv("RUN_INTERVAL_MIN_REDTAG", "60") or 60)
 
-# ---- Damages ----
 CHANNEL_ID_DAMAGES = int(os.getenv("CHANNEL_ID_DAMAGES", "0") or 0)
 THREAD_ID_DAMAGES  = int(os.getenv("THREAD_ID_DAMAGES", "0") or 0)
 RUN_INTERVAL_MIN_DAMAGES = int(os.getenv("RUN_INTERVAL_MIN_DAMAGES", "60") or 60)
 
-# ---- Free Games ----
 CHANNEL_ID_FREEGAMES = int(os.getenv("CHANNEL_ID_FREEGAMES", "0") or 0)
 THREAD_ID_FREEGAMES  = int(os.getenv("THREAD_ID_FREEGAMES", "0") or 0)
 RUN_INTERVAL_MIN_FREEGAMES = int(os.getenv("RUN_INTERVAL_MIN_FREEGAMES", "60") or 60)
 
-# ---- Marvel ----
 CHANNEL_ID_MARVEL = int(os.getenv("CHANNEL_ID_MARVEL", "0") or 0)
 THREAD_ID_MARVEL  = int(os.getenv("THREAD_ID_MARVEL", "0") or 0)
 RUN_INTERVAL_MIN_MARVEL = int(os.getenv("RUN_INTERVAL_MIN_MARVEL", "60") or 60)
 
-# ---- DC ----
 CHANNEL_ID_DC = int(os.getenv("CHANNEL_ID_DC", "0") or 0)
 THREAD_ID_DC  = int(os.getenv("THREAD_ID_DC", "0") or 0)
 RUN_INTERVAL_MIN_DC = int(os.getenv("RUN_INTERVAL_MIN_DC", "60") or 60)
 
-# ---- Pacing ----
 POST_DELAY     = float(os.getenv("POST_DELAY", "0.25"))
 BATCH_SIZE     = int(os.getenv("BATCH_SIZE", "50"))
 BATCH_COOLDOWN = float(os.getenv("BATCH_COOLDOWN", "10.0"))
 
-# ---- Forum auto-thread ----
 FORUM_AUTOCREATE   = os.getenv("FORUM_AUTOCREATE", "false").lower() in {"1","true","yes","on"}
 FORUM_THREAD_TITLE = os.getenv("FORUM_THREAD_TITLE", "IST Updates")
 
-# ---- Health / logging ----
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0") or 0)
 HEALTH_MESSAGES = os.getenv("HEALTH_MESSAGES", "true").lower() in {"1","true","yes","on"}
 HEALTH_SUMMARY_PREFIX = os.getenv("HEALTH_SUMMARY_PREFIX", "[Health]")
 
-# ---- Dev: fast guild sync ----
 TEST_GUILD_ID = int(os.getenv("TEST_GUILD_ID", "0") or 0)
 MY_GUILD = discord.Object(id=TEST_GUILD_ID) if TEST_GUILD_ID else None
 
-# ======================
-# Bot
-# ======================
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Locks
 redtag_lock = asyncio.Lock()
 damages_lock = asyncio.Lock()
 freegames_lock = asyncio.Lock()
 marvel_lock = asyncio.Lock()
-dc_lock = asyncio.Lock()  # NEW
+dc_lock = asyncio.Lock()  
 
-# Last-run stats
 last_stats = {
     "Red Tag":    {"last_run": None, "scraped": 0, "new": 0, "changed": 0, "pruned": 0, "interval_min": RUN_INTERVAL_MIN_REDTAG},
     "Damages":    {"last_run": None, "scraped": 0, "new": 0, "changed": 0, "pruned": 0, "interval_min": RUN_INTERVAL_MIN_DAMAGES},
@@ -93,9 +69,6 @@ last_stats = {
     "DC":         {"last_run": None, "scraped": 0, "new": 0, "changed": 0, "pruned": 0, "interval_min": RUN_INTERVAL_MIN_DC},
 }
 
-# ======================
-# Helpers
-# ======================
 async def post_items(channel_like, render_fn, items: list[dict], label: str | None = None):
     if not items: return
     total = len(items); batch_count = 0
@@ -237,7 +210,6 @@ async def run_scraper_once(module, channel_like, label: str, lock: asyncio.Lock)
             return
         except Exception:
             print(f"[{label}] ERROR during get_updates():"); traceback.print_exc(); return
-    # Post only changes by default
     await post_items(channel_like, module.render_item, changed_items, label=label)
     last_stats[label].update({
         "last_run": datetime.now(timezone.utc),
@@ -246,15 +218,11 @@ async def run_scraper_once(module, channel_like, label: str, lock: asyncio.Lock)
     print(f"[{label}] scraped={total} new={len(new_items)} changed={len(changed_items)} pruned={pruned}")
     await send_health(label, channel_like, total, len(new_items), len(changed_items), pruned)
 
-# ======================
-# Events / Commands / Tasks
-# ======================
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     await print_startup_diagnostics()
 
-    # Load cogs
     for ext in ("cogs.poll", "cogs.birthday"):
         try:
             await bot.load_extension(ext)
@@ -262,7 +230,6 @@ async def on_ready():
         except Exception:
             print(f"Failed to load {ext}:"); traceback.print_exc()
 
-    # Slash sync
     try:
         if MY_GUILD: await bot.tree.sync(guild=MY_GUILD); print(f"Slash synced to guild {TEST_GUILD_ID}")
         else:         await bot.tree.sync();               print("Global slash commands synced.")
@@ -277,7 +244,6 @@ async def on_ready():
 
     await asyncio.sleep(0.2)
 
-# Manual commands
 @bot.tree.command(name="redtag", description="Run the Red Tag scrape now.")
 async def redtag_cmd(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -318,7 +284,6 @@ async def dc_cmd(interaction: discord.Interaction):
     await run_scraper_once(dc, target, "DC", lock=dc_lock)
     await interaction.followup.send("DC done.", ephemeral=True)
 
-# /stats
 @bot.tree.command(name="stats", description="Show last run stats and current intervals.")
 async def stats_cmd(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
@@ -336,7 +301,6 @@ async def stats_cmd(interaction: discord.Interaction):
     for name in ("Red Tag","Damages","Free Games","Marvel","DC"):
         await interaction.followup.send(embed=emb(name), ephemeral=True)
 
-# /interval
 @bot.tree.command(name="interval", description="Change run interval (minutes) for a feed.")
 async def interval_cmd(interaction: discord.Interaction, feed: str, minutes: int):
     await interaction.response.defer(ephemeral=True)
@@ -356,7 +320,6 @@ async def interval_cmd(interaction: discord.Interaction, feed: str, minutes: int
         traceback.print_exc()
         await interaction.followup.send("Failed to update interval.", ephemeral=True)
 
-# Schedules
 @tasks.loop(minutes=RUN_INTERVAL_MIN_REDTAG)
 async def auto_redtag():
     target = await resolve_channel_like(CHANNEL_ID_REDTAG, THREAD_ID_REDTAG)
@@ -387,7 +350,6 @@ async def auto_dc():
     if not target or not hasattr(target,"send"): print("auto_dc: no sendable channel."); return
     await run_scraper_once(dc, target, "DC", lock=dc_lock)
 
-# Staggers
 @auto_redtag.before_loop
 async def _s1():
     await asyncio.sleep(2)
@@ -409,7 +371,6 @@ async def _s5():
     await asyncio.sleep(14)
 
 
-# Main
 if __name__ == "__main__":
     print(
         f"RedTag:   channel={CHANNEL_ID_REDTAG} interval={RUN_INTERVAL_MIN_REDTAG}min\n"
