@@ -1,29 +1,24 @@
-# scrapers/marvel_watch.py
 from __future__ import annotations
-
 import json, os, re, time
 from random import random
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from urllib.parse import urljoin, urlparse
-
 import requests
 from bs4 import BeautifulSoup
 
 BASE_URL = "https://www.instocktrades.com/publishers/marvel"
 
-# --- env toggles ---
 MARVEL_DEBUG   = os.getenv("MARVEL_DEBUG", "0").lower() in {"1","true","yes","on"}
 POST_NEW_ITEMS = os.getenv("MARVEL_POST_NEW", "false").lower() in {"1","true","yes","on"}
 PER_PAGE_DELAY = float(os.getenv("MARVEL_PER_PAGE_DELAY", "0.8"))
 MAX_PAGES      = int(os.getenv("MARVEL_MAX_PAGES", "200"))
 TIMEOUT        = int(os.getenv("MARVEL_TIMEOUT", "25"))
-MAX_RUN_SECONDS= float(os.getenv("MARVEL_MAX_RUN_SECONDS", "540"))  # ~9 minutes budget (Anton gives 10)
+MAX_RUN_SECONDS= float(os.getenv("MARVEL_MAX_RUN_SECONDS", "540"))
 
 MARVEL_COOKIE  = os.getenv("MARVEL_COOKIE", "").strip()
 MARVEL_REFERER = os.getenv("MARVEL_REFERER", "https://www.instocktrades.com/").strip()
 
-# --- storage ---
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -31,7 +26,6 @@ SEEN_JSON = DATA_DIR / "marvel_seen.json"
 if not SEEN_JSON.exists():
     SEEN_JSON.write_text("{}", encoding="utf-8")
 
-# --- headers ---
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -46,7 +40,6 @@ HEADERS = {
 if MARVEL_COOKIE:
     HEADERS["Cookie"] = MARVEL_COOKIE
 
-# --- regex helpers ---
 money_rx = re.compile(r"\$\s?\d{1,3}(?:[,\d]{3})*(?:\.\d{2})?")
 add_rx   = re.compile(r"add\s*to\s*cart", re.I)
 
