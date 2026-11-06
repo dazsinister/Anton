@@ -1,270 +1,125 @@
+"""Free games from the Epic Games Store and GamerPower (Steam, GOG and others)."""
 from __future__ import annotations
-import json
-import time
+
 import re
+import time
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Dict, List, Tuple, Optional
-import requests
+from typing import Optional
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AntonFreeGames/1.0)"}
-TIMEOUT = (5, 15)
-PER_SOURCE_DELAY = 0.4
+from scrapers.common import ScrapeError, get, make_session
 
-BASE_DIR  = Path(__file__).resolve().parent.parent
-DATA_DIR  = BASE_DIR / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-SEEN_JSON = DATA_DIR / "freegames_seen.json"
+EPIC_URL = ("https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions"
+            "?locale=en-US&country=US&allowCountries=US")
+GAMERPOWER_URL = "https://www.gamerpower.com/api/giveaways?type=game"
 
-if not SEEN_JSON.exists():
-    SEEN_JSON.write_text("{}", encoding="utf-8")
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-def _parse_dt(s: Optional[str]) -> Optional[str]:
-    """Return normalized ISO timestamp (UTC) if parseable, else None."""
+def _iso(s: Optional[str]) -> Optional[str]:
     if not s:
         return None
     try:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        return dt.astimezone(timezone.utc).isoformat()
-    except Exception:
+    except ValueError:
         return None
+    if dt.tzinfo is None:  # GamerPower sends "2026-11-13 23:59:00" with no zone; it's UTC
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds")
 
-def _short_dt(s: Optional[str]) -> Optional[str]:
-    if not s:
-        return None
-    try:
-        dt = datetime.fromisoformat(s)
-        return dt.strftime("%Y-%m-%d %H:%M UTC")
-    except Exception:
-        return s
 
-def _clean_title(t: str) -> str:
-    return re.sub(r"\s+", " ", t).strip()
+def _clean(t: str) -> str:
+    return re.sub(r"\s+", " ", t or "").strip()
 
-def _load_seen() -> Dict[str, dict]:
-    try:
-        return json.loads(SEEN_JSON.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
 
-def _save_seen(seen: Dict[str, dict]) -> None:
-    SEEN_JSON.write_text(json.dumps(seen, ensure_ascii=False, indent=2), encoding="utf-8")
+def _image(images: list, *preferred: str) -> Optional[str]:
+    for kind in preferred:
+        for im in images or []:
+            if im.get("type") == kind and im.get("url"):
+                return im["url"]
+    return None
 
-def fetch_epic() -> List[dict]:
-    """
-    Pull current Epic free games.
-    Endpoint is known to expose weekly promos.
-    """
-    url = "https://store-site-backend-static-ipv4.ak.epicgames.com/freeGamesPromotions?locale=en-US&country=US&allowCountries=US"
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
-        r.raise_for_status()
-        data = r.json()
-    except Exception:
-        return []
 
-    out: List[dict] = []
-    elements = (
-        data.get("data", {})
-            .get("Catalog", {})
-            .get("searchStore", {})
-            .get("elements", [])
-    )
+def fetch_epic(session) -> list[dict]:
+    data = get(session, EPIC_URL).json()
+    elements = data.get("data", {}).get("Catalog", {}).get("searchStore", {}).get("elements", []) or []
+    out = []
+    now = datetime.now(timezone.utc).isoformat()
     for el in elements:
-        title = _clean_title(el.get("title") or "")
+        title = _clean(el.get("title"))
         if not title:
             continue
-
-        slug = el.get("productSlug") or ""
-        url = f"https://store.epicgames.com/p/{slug}" if slug else "https://store.epicgames.com/"
-
-        promos = (el.get("promotions") or {})
-        current = (promos.get("promotionalOffers") or [])
-        upcoming = (promos.get("upcomingPromotionalOffers") or [])
-
-        windows = []
-        if current and isinstance(current, list):
-            for block in current:
-                for p in block.get("promotionalOffers", []):
-                    discount = (p.get("discountSetting") or {}).get("discountType")
-                    start = p.get("startDate")
-                    end = p.get("endDate")
-                    if discount == "PERCENTAGE":
-                        windows.append({
-                            "start_date": _parse_dt(start),
-                            "end_date": _parse_dt(end),
-                        })
-
-        if not windows:
+        offers = []
+        for block in ((el.get("promotions") or {}).get("promotionalOffers") or []):
+            for p in block.get("promotionalOffers", []):
+                if (p.get("discountSetting") or {}).get("discountPercentage") == 0 or \
+                        (p.get("discountSetting") or {}).get("discountType") == "PERCENTAGE":
+                    offers.append(p)
+        # Only count it if it's actually free right now
+        price = ((el.get("price") or {}).get("totalPrice") or {})
+        if not offers or price.get("discountPrice", 1) != 0:
             continue
-
-        end_date = windows[0].get("end_date")
+        end = _iso(offers[0].get("endDate"))
+        if end and end < now:
+            continue
+        slug = el.get("productSlug") or ((el.get("catalogNs") or {}).get("mappings") or [{}])[0].get("pageSlug") or ""
+        orig = price.get("originalPrice")
         out.append({
-            "key": f"epic::{slug or title.lower()}",
+            "key": f"epic:{slug or title.lower()}",
             "title": title,
-            "platform": "Epic Games",
-            "source": "Epic",
-            "url": url,
-            "start_date": windows[0].get("start_date"),
-            "end_date": end_date,
+            "url": f"https://store.epicgames.com/p/{slug}" if slug else "https://store.epicgames.com/free-games",
+            "price_cents": 0,
+            "msrp_cents": orig if isinstance(orig, int) and orig > 0 else None,
+            "discount": "100% off",
+            "available": None,
+            "image": _image(el.get("keyImages"), "OfferImageWide", "DieselStoreFrontWide", "Thumbnail"),
+            "extra": {"platform": "Epic Games Store", "source": "Epic", "end_date": end},
         })
-
     return out
 
-def fetch_gamerpower() -> List[dict]:
-    """
-    GamerPower aggregates giveaways (Steam/Epic/GOG/etc.).
-    API docs: https://www.gamerpower.com/api-read
-    We'll fetch the active giveaways list and normalize.
-    """
-    url = "https://www.gamerpower.com/api/giveaways"
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
-        r.raise_for_status()
-        data = r.json()
-    except Exception:
-        return []
 
-    out: List[dict] = []
+def fetch_gamerpower(session) -> list[dict]:
+    data = get(session, GAMERPOWER_URL).json()
+    out = []
     for g in data if isinstance(data, list) else []:
-        try:
-            title = _clean_title(g.get("title") or "")
-            if not title:
-                continue
-            platforms = _clean_title(g.get("platforms") or "")
-            worth = g.get("worth") or ""
-            end_str = g.get("end_date") or None
-            end_iso = _parse_dt(end_str) if end_str else None
-            url = g.get("open_giveaway_url") or g.get("giveaway_url") or g.get("url") or ""
-            if not url:
-                continue
-
-            gid = str(g.get("id") or "")
-            key = f"gamerpower::{gid}" if gid else f"gamerpower::{title.lower()}::{url}"
-
-            gtype = (g.get("type") or "").lower()
-
-            out.append({
-                "key": key,
-                "title": title,
-                "platform": platforms or "Various",
-                "source": "GamerPower",
-                "url": url,
-                "start_date": None,
-                "end_date": end_iso,
-                "worth": worth,
-                "type": gtype,
-            })
-        except Exception:
+        title = _clean(g.get("title"))
+        url = g.get("open_giveaway_url") or g.get("giveaway_url") or ""
+        if not title or not url:
             continue
-
+        worth = g.get("worth") or ""
+        end = g.get("end_date")
+        out.append({
+            "key": f"gamerpower:{g.get('id') or title.lower()}",
+            "title": title,
+            "url": url,
+            "price_cents": 0,
+            "msrp_cents": None if worth in ("", "N/A") else _worth_cents(worth),
+            "discount": None,
+            "available": None,
+            "image": g.get("image") or g.get("thumbnail"),
+            "extra": {"platform": _clean(g.get("platforms")) or "Various", "source": "GamerPower",
+                      "end_date": None if end in (None, "", "N/A") else _iso(end)},
+        })
     return out
 
-def scrape_all_sources() -> List[dict]:
-    items: List[dict] = []
-    epic_items = fetch_epic()
-    items.extend(epic_items)
-    time.sleep(PER_SOURCE_DELAY)
-    gp_items = fetch_gamerpower()
-    items.extend(gp_items)
 
-    uniq: Dict[str, dict] = {}
-    for it in items:
-        k = it["key"]
-        if k in uniq:
-            if it["source"] == "Epic":
-                uniq[k] = it
-        else:
-            uniq[k] = it
+def _worth_cents(worth: str) -> Optional[int]:
+    m = re.search(r"(\d+(?:\.\d{1,2})?)", worth.replace(",", ""))
+    return int(round(float(m.group(1)) * 100)) if m else None
 
-    out = list(uniq.values())
-    out.sort(key=lambda x: (x.get("platform", ""), x.get("title", "").lower()))
-    return out
 
-def get_updates() -> Tuple[List[dict], List[dict], int, int]:
-    """
-    Returns:
-      new_items: unseen items (first time)
-      changed_items: known items whose end_date OR url/title/platform changed
-      pruned_count: items removed because they're no longer active this run
-      total_scraped: total items gathered across sources this run
-    """
-    all_items = scrape_all_sources()
-    total = len(all_items)
-    current_keys = {it["key"] for it in all_items}
-
-    seen = _load_seen()
-
-    stale = set(seen.keys()) - current_keys
-    for k in stale:
-        seen.pop(k, None)
-    pruned = len(stale)
-
-    new_items: List[dict] = []
-    changed_items: List[dict] = []
-
-    for it in all_items:
-        k = it["key"]
-        snapshot = {
-            "title": it.get("title"),
-            "platform": it.get("platform"),
-            "url": it.get("url"),
-            "end_date": it.get("end_date"),
-            "source": it.get("source"),
-        }
-
-        if k not in seen:
-            new_items.append(it)
-            seen[k] = snapshot
-        else:
-            prev = seen[k]
-            changed = (
-                (prev.get("end_date") or "") != (snapshot.get("end_date") or "") or
-                (prev.get("url") or "")      != (snapshot.get("url") or "") or
-                (prev.get("title") or "")    != (snapshot.get("title") or "") or
-                (prev.get("platform") or "") != (snapshot.get("platform") or "")
-            )
-            if changed:
-                it["_old_end"] = prev.get("end_date")
-                it["_old_url"] = prev.get("url")
-                it["_old_title"] = prev.get("title")
-                it["_old_platform"] = prev.get("platform")
-                changed_items.append(it)
-                seen[k] = snapshot
-
-    _save_seen(seen)
-    return new_items, changed_items, pruned, total
-
-def render_item(it: dict) -> str:
-    """Discord message body."""
-    parts = [f"**{it['title']}**"]
-    meta = []
-
-    if it.get("platform"):
-        meta.append(f"Platform: {it['platform']}")
-    if it.get("source"):
-        meta.append(f"Source: {it['source']}")
-    if it.get("end_date"):
-        meta.append(f"Ends: {_short_dt(it['end_date'])}")
-    if meta:
-        parts.append(" • ".join(meta))
-
-    if it.get("url"):
-        parts.append(it["url"])
-
-    ch = []
-    if it.get("_old_end") is not None and (it.get("_old_end") != it.get("end_date")):
-        ch.append(f"End: {_short_dt(it.get('_old_end'))} → {_short_dt(it.get('end_date'))}")
-    if it.get("_old_url") is not None and (it.get("_old_url") != it.get("url")):
-        ch.append("URL changed")
-    if it.get("_old_title") is not None and (it.get("_old_title") != it.get("title")):
-        ch.append("Title updated")
-    if it.get("_old_platform") is not None and (it.get("_old_platform") != it.get("platform")):
-        ch.append("Platform updated")
-    if ch:
-        parts.append("**Updated** → " + " | ".join(ch))
-
-    return "\n".join(parts)
+def scrape(_base_url: str = "") -> list[dict]:
+    items: list[dict] = []
+    errors = []
+    with make_session() as session:
+        session.headers["Accept"] = "application/json"
+        for fetch in (fetch_epic, fetch_gamerpower):
+            try:
+                items.extend(fetch(session))
+            except Exception as e:
+                errors.append(f"{fetch.__name__}: {e}")
+            time.sleep(0.4)
+    if errors and not items:
+        raise ScrapeError("; ".join(errors))
+    # Epic shows up in both sources; keep the Epic copy (it has the real store link)
+    epic_titles = {it["title"].lower() for it in items if it["key"].startswith("epic:")}
+    return [it for it in items
+            if it["key"].startswith("epic:")
+            or not ("epic" in it["extra"]["platform"].lower() and it["title"].lower().split(" (")[0] in epic_titles)]

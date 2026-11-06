@@ -1,0 +1,18 @@
+# Secrets — never commit these
+.env
+
+# Bot data (database, birthdays, debug dumps) lives only on the machine running the bot
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
