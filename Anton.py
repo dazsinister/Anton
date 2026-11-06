@@ -20,13 +20,16 @@ COGS = (
     "cogs.poll",
     "cogs.fun",
     "cogs.ai",
+    "cogs.community",
 )
 
 
 class Anton(commands.Bot):
-    def __init__(self):
+    def __init__(self, members_intent: bool = True):
         intents = discord.Intents.default()
-        intents.members = False          # not needed; keeps setup simple (no privileged intents)
+        # Needed for welcome/leave messages and auto-role. It's a switch in the Developer
+        # Portal (your app → Bot → Server Members Intent); if it's off, see run() below.
+        intents.members = members_intent
         intents.message_content = False  # everything is slash commands
         super().__init__(command_prefix=commands.when_mentioned, intents=intents)
 
@@ -90,4 +93,11 @@ if __name__ == "__main__":
     db.init()
     print_config()
     discord.utils.setup_logging(level=logging.INFO, root=False)
-    Anton().run(config.DISCORD_TOKEN, log_handler=None)
+    try:
+        Anton().run(config.DISCORD_TOKEN, log_handler=None)
+    except discord.PrivilegedIntentsRequired:
+        print("\n⚠️  The Server Members Intent is off in the Discord Developer Portal.\n"
+              "   Welcome/leave messages and auto-role won't work until you turn it on:\n"
+              "   Developer Portal → your app → Bot → Server Members Intent → Save, then restart Anton.\n"
+              "   Starting without it for now…\n")
+        Anton(members_intent=False).run(config.DISCORD_TOKEN, log_handler=None)

@@ -32,23 +32,36 @@ A self-hosted Discord bot for comic collectors. Anton watches InStockTrades, Hal
 | `/ask <question>` | everyone | AI answer using Claude with live web search (needs an API key, see below). |
 | `/status` | everyone | Health of every feed: last run, next run, listings tracked. |
 | `/feed run / channel / interval / toggle / reset` | admins | Run a feed now, or change its channel, timer or on/off without restarting. |
+| `/welcome channel / message / dm / autorole / test / off` | admins | Greet new members with an embed (avatar and member number), optionally DM them, and give them a starting role. |
+| `/leave channel / message / test / off` | admins | Post when someone leaves (same channel as welcomes unless you pick another). |
+| `/colors setup / post` | admins | Creates (or reuses) the Yellow, Blue, Green, Purple, Red and Orange roles and posts a picker with buttons. The buttons keep working after restarts. |
 
-`/feed` is limited to members with **Manage Server** by default. Server admins can adjust that under *Server Settings → Integrations → Anton*.
+`/feed`, `/welcome` and `/leave` are limited to members with **Manage Server** by default, and `/colors` to **Manage Roles**. Server admins can adjust that under *Server Settings → Integrations → Anton*.
+
+Welcome, DM and leave messages can use `{user}` (mention), `{name}`, `{server}` and `{count}` (member count).
 
 ## Setup
 
 1. Install Python 3.10 or newer.
-2. Install the requirements:
+2. Install the requirements. Newer Linux versions refuse a global `pip install` ("externally-managed-environment"), so use a virtual environment:
    ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
+   Run `source .venv/bin/activate` again in each new terminal before starting Anton. If creating the venv fails, run `sudo apt install python3-venv` first.
 3. Copy `.env.example` to `.env` and fill in at least `DISCORD_TOKEN` and the channel IDs for the feeds you want. (Right-click a channel in Discord → *Copy Channel ID*; turn on Developer Mode in Discord's settings if you don't see it.)
 4. Run it:
    ```bash
    python Anton.py
    ```
 
-When inviting the bot, give it the `bot` and `applications.commands` scopes, with permission to **Send Messages, Embed Links, Read Message History** (and **Create Public Threads** if a feed posts to a Forum). No privileged intents are needed.
+When inviting the bot, give it the `bot` and `applications.commands` scopes, with permission to **Send Messages, Embed Links, Read Message History** and **Manage Roles** (and **Create Public Threads** if a feed posts to a Forum).
+
+**Two Discord settings for welcome messages and color roles:**
+
+1. **Server Members Intent.** In the Developer Portal → your app → **Bot**, turn on **Server Members Intent** and save. Without it Discord doesn't tell Anton when people join or leave. If it's off, Anton still starts and prints a reminder, but welcome/leave messages and auto-role stay quiet.
+2. **Role order.** In your server → Settings → **Roles**, drag Anton's role **above** the color roles (and the auto-role). Discord won't let a bot hand out roles ranked above its own. A member's name shows the color of their highest colored role, so other colored roles above the colors will hide them.
 
 New slash commands can take a while to show up globally. For instant updates while testing, set `TEST_GUILD_ID` to your server's ID.
 
