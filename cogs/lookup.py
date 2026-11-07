@@ -132,7 +132,7 @@ class Lookup(commands.Cog):
     @app_commands.describe(keyword="Words that must all be in the title, e.g. saga compendium",
                            max_price="Only tell me when it's at or under this price (optional), e.g. 25")
     async def watch_add(self, interaction: discord.Interaction, keyword: app_commands.Range[str, 2, 80],
-                        max_price: Optional[app_commands.Range[float, 0, 10000]] = None):
+                        max_price: Optional[app_commands.Range[float, 0.0, 10000.0]] = None):
         if len(await asyncio.to_thread(db.list_watches, interaction.user.id)) >= 25:
             return await interaction.response.send_message("You already have 25 watches. Remove one first.", ephemeral=True)
         cap = int(round(max_price * 100)) if max_price is not None else None

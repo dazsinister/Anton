@@ -52,8 +52,16 @@ class Anton(commands.Bot):
         if config.TEST_GUILD_ID:
             guild = discord.Object(id=config.TEST_GUILD_ID)
             self.tree.copy_global_to(guild=guild)
-            synced = await self.tree.sync(guild=guild)
-            print(f"Synced {len(synced)} slash commands to test server {config.TEST_GUILD_ID}")
+            try:
+                synced = await self.tree.sync(guild=guild)
+                print(f"Synced {len(synced)} slash commands to test server {config.TEST_GUILD_ID}")
+            except discord.Forbidden:
+                print(f"\n⚠️  Couldn't add slash commands to server {config.TEST_GUILD_ID} (Missing Access).\n"
+                      "   Either the bot isn't in that server yet, or TEST_GUILD_ID isn't your server's ID.\n"
+                      "   Invite it (see README → Setup), check the ID, then restart Anton.\n"
+                      "   Falling back to global commands, which can take up to an hour to appear…\n")
+                synced = await self.tree.sync()
+                print(f"Synced {len(synced)} global slash commands")
         else:
             synced = await self.tree.sync()
             print(f"Synced {len(synced)} global slash commands (new ones can take a while to appear)")
@@ -95,6 +103,11 @@ if __name__ == "__main__":
     discord.utils.setup_logging(level=logging.INFO, root=False)
     try:
         Anton().run(config.DISCORD_TOKEN, log_handler=None)
+    except discord.LoginFailure:
+        raise SystemExit(
+            "\n⚠️  Discord rejected the token in .env.\n"
+            "   Use the token from Developer Portal → your app → Bot → Reset Token → Copy\n"
+            "   (not the Application ID, Public Key or Client Secret), paste it after DISCORD_TOKEN=, and restart.")
     except discord.PrivilegedIntentsRequired:
         print("\n⚠️  The Server Members Intent is off in the Discord Developer Portal.\n"
               "   Welcome/leave messages and auto-role won't work until you turn it on:\n"

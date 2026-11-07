@@ -102,7 +102,7 @@ class Polls(commands.Cog):
                    answer3: Optional[app_commands.Range[str, 1, 75]] = None,
                    answer4: Optional[app_commands.Range[str, 1, 75]] = None,
                    answer5: Optional[app_commands.Range[str, 1, 75]] = None,
-                   hours: Optional[app_commands.Range[float, 0.1, 168]] = None):
+                   hours: Optional[app_commands.Range[float, 0.1, 168.0]] = None):
         options = [a.strip() for a in (answer1, answer2, answer3, answer4, answer5) if a and a.strip()]
         if len(options) < 2:
             return await interaction.response.send_message("A poll needs at least two answers.", ephemeral=True)
