@@ -108,7 +108,12 @@ def parse_page(html: str, base: str) -> list[dict]:
 def scrape(base_url: str) -> list[dict]:
     """Walk ?pg=1,2,3… until a page adds nothing new."""
     start = time.monotonic()
-    session = make_session(referer="https://www.instocktrades.com/", cookie=config.env_str("IST_COOKIE"))
+    session = make_session(
+        referer="https://www.instocktrades.com/",
+        cookie=config.env_str("IST_COOKIE"),
+        browser=config.env_bool("IST_BROWSER_HEADERS", False),
+        user_agent=config.env_str("IST_USER_AGENT"),
+    )
     found: dict[str, dict] = {}
     with session:
         for pg in range(1, config.SCRAPE_MAX_PAGES + 1):

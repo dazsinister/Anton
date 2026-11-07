@@ -25,11 +25,25 @@ class ScrapeError(Exception):
     """The site couldn't be reached at all (as opposed to an empty listing)."""
 
 
-def make_session(referer: str = "", cookie: str = "") -> requests.Session:
+# What the old Red Tag / Damages scraper sent, which InStockTrades accepted.
+# Sites with bot protection often block requests that claim to be Chrome but
+# don't behave like a real browser, while an honest bot name gets through.
+BOT_USER_AGENT = "Mozilla/5.0 (compatible; IST-RedTagBot/2.3)"
+
+
+def make_session(referer: str = "", cookie: str = "", browser: bool = True,
+                 user_agent: str = "") -> requests.Session:
+    """browser=True sends Chrome-like headers; False sends only a plain bot User-Agent."""
     s = requests.Session()
-    s.headers.update(BROWSER_HEADERS)
-    if referer:
-        s.headers["Referer"] = referer
+    if browser:
+        s.headers.update(BROWSER_HEADERS)
+        if referer:
+            s.headers["Referer"] = referer
+    else:
+        # Keep requests' own defaults (Accept, Accept-Encoding…), exactly like the old scraper
+        s.headers["User-Agent"] = BOT_USER_AGENT
+    if user_agent:
+        s.headers["User-Agent"] = user_agent
     if cookie:
         s.headers["Cookie"] = cookie
     return s
